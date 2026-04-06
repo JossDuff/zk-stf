@@ -3,4 +3,5 @@ members = ["lib", "program", "script"]
 resolver = "2"
 
 [workspace.dependencies]
-alloy-sol-types = "*"
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
