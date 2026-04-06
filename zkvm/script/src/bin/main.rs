@@ -1,5 +1,5 @@
 use clap::Parser;
-use ledger_lib::{apply_block, hash_transactions, BlockCommit, State, Tx};
+use ledger_lib::{apply_block, compute_state_root, hash_transactions, BlockCommit, State, Tx};
 use sp1_sdk::{
     blocking::{ProveRequest, Prover, ProverClient},
     include_elf, Elf, ProvingKey, SP1Stdin,
@@ -78,23 +78,24 @@ fn main() {
 
     // Always run native execution for baseline timing.
     let native_start = Instant::now();
-    let pre_hash = state.hash();
+    let pre_root = compute_state_root(&state, args.num_accounts);
     let mut native_state = state.clone();
     let applied = apply_block(&mut native_state, &txs);
-    let native_post_hash = native_state.hash();
+    let native_post_root = compute_state_root(&native_state, args.num_accounts);
     let native_tx_hash = hash_transactions(&txs);
     let native_elapsed = native_start.elapsed();
 
     println!("\n--- Native Execution (re-execution baseline) ---");
     println!("Txs applied: {}/{}", applied, args.num_txs);
-    println!("Pre-state hash:  {}", hex::encode(pre_hash));
-    println!("Post-state hash: {}", hex::encode(native_post_hash));
+    println!("Pre-state root:  {}", hex::encode(pre_root));
+    println!("Post-state root: {}", hex::encode(native_post_root));
     println!("Execution time:  {:?}", native_elapsed);
 
     if args.execute {
         // Also run inside the SP1 VM (no proof) to get cycle count.
         let client = ProverClient::from_env();
         let mut stdin = SP1Stdin::new();
+        stdin.write(&args.num_accounts);
         stdin.write(&state);
         stdin.write(&txs);
 
@@ -102,8 +103,8 @@ fn main() {
         let (mut output, report) = client.execute(LEDGER_ELF, stdin).run().unwrap();
         let commit: BlockCommit = output.read();
 
-        assert_eq!(commit.pre_state_hash, pre_hash);
-        assert_eq!(commit.post_state_hash, native_post_hash);
+        assert_eq!(commit.pre_state_root, pre_root);
+        assert_eq!(commit.post_state_root, native_post_root);
         assert_eq!(commit.tx_hash, native_tx_hash);
         println!("Public values match native execution.");
         println!("Cycles: {}", report.total_instruction_count());
@@ -113,6 +114,7 @@ fn main() {
         let pk = client.setup(LEDGER_ELF).expect("failed to setup elf");
 
         let mut stdin = SP1Stdin::new();
+        stdin.write(&args.num_accounts);
         stdin.write(&state);
         stdin.write(&txs);
 
@@ -127,8 +129,8 @@ fn main() {
 
         // Check public values match native execution.
         let commit: BlockCommit = proof.public_values.clone().read();
-        assert_eq!(commit.pre_state_hash, pre_hash);
-        assert_eq!(commit.post_state_hash, native_post_hash);
+        assert_eq!(commit.pre_state_root, pre_root);
+        assert_eq!(commit.post_state_root, native_post_root);
         assert_eq!(commit.tx_hash, native_tx_hash);
         println!("Public values match native execution.");
 

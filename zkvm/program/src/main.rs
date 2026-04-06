@@ -1,23 +1,24 @@
 #![no_main]
 sp1_zkvm::entrypoint!(main);
 
-use ledger_lib::{apply_block, hash_transactions, BlockCommit, State, Tx};
+use ledger_lib::{apply_block, compute_state_root, hash_transactions, BlockCommit, State, Tx};
 
 pub fn main() {
+    let num_accounts: u32 = sp1_zkvm::io::read();
     let state: State = sp1_zkvm::io::read();
     let txs: Vec<Tx> = sp1_zkvm::io::read();
 
-    let pre_state_hash = state.hash();
+    let pre_state_root = compute_state_root(&state, num_accounts);
     let tx_hash = hash_transactions(&txs);
 
     let mut new_state = state;
     apply_block(&mut new_state, &txs);
 
-    let post_state_hash = new_state.hash();
+    let post_state_root = compute_state_root(&new_state, num_accounts);
 
     let commit = BlockCommit {
-        pre_state_hash,
-        post_state_hash,
+        pre_state_root,
+        post_state_root,
         tx_hash,
     };
     sp1_zkvm::io::commit(&commit);
