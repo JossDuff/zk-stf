@@ -54,11 +54,8 @@ pub fn apply_block(state: &mut State, txs: &[Tx]) -> u32 {
 /// - Each leaf = SHA256(account_id || balance) for accounts 0..num_leaves
 /// - Padded to the next power of two with zero-hash leaves
 /// - Internal nodes = SHA256(left_child || right_child)
-///
-/// This is O(n) SHA-256 hashes, making it significantly more expensive
-/// than a flat hash — which is the point for benchmarking.
-pub fn compute_state_root(state: &State, num_leaves: u32) -> [u8; 32] {
-    let n = (num_leaves as usize).next_power_of_two();
+pub fn compute_state_root(state: &State) -> [u8; 32] {
+    let n = (state.balances.len()).next_power_of_two().max(1);
 
     // Build leaf layer
     let mut layer: Vec<[u8; 32]> = Vec::with_capacity(n);

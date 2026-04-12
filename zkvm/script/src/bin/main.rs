@@ -78,10 +78,10 @@ fn main() {
 
     // Always run native execution for baseline timing.
     let native_start = Instant::now();
-    let pre_root = compute_state_root(&state, args.num_accounts);
+    let pre_root = compute_state_root(&state);
     let mut native_state = state.clone();
     let applied = apply_block(&mut native_state, &txs);
-    let native_post_root = compute_state_root(&native_state, args.num_accounts);
+    let native_post_root = compute_state_root(&native_state);
     let native_tx_hash = hash_transactions(&txs);
     let native_elapsed = native_start.elapsed();
 
@@ -95,7 +95,6 @@ fn main() {
         // Also run inside the SP1 VM (no proof) to get cycle count.
         let client = ProverClient::from_env();
         let mut stdin = SP1Stdin::new();
-        stdin.write(&args.num_accounts);
         stdin.write(&state);
         stdin.write(&txs);
 
@@ -114,7 +113,6 @@ fn main() {
         let pk = client.setup(LEDGER_ELF).expect("failed to setup elf");
 
         let mut stdin = SP1Stdin::new();
-        stdin.write(&args.num_accounts);
         stdin.write(&state);
         stdin.write(&txs);
 
