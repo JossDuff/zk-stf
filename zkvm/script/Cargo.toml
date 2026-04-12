@@ -16,6 +16,10 @@ path = "src/bin/vkey.rs"
 name = "network"
 path = "src/bin/network.rs"
 
+[[bin]]
+name = "run-workload"
+path = "src/bin/run_workload.rs"
+
 [dependencies]
 sp1-sdk = { version = "6.0.1", features = ["blocking", "native-gnark", "network"] }
 tokio = { version = "1", features = ["full"] }
