@@ -257,6 +257,19 @@ async fn main() {
         state = new_state;
     }
 
+    // Update manifest with final block count.
+    let manifest = Manifest {
+        num_accounts: args.num_accounts,
+        initial_balance: args.initial_balance,
+        num_txs_per_block: args.num_txs,
+        num_blocks: args.num_blocks,
+    };
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .expect("failed to update manifest");
+
     println!("\n========== Done ==========");
     println!("Workload saved to: {}", args.workload_dir.display());
 }
