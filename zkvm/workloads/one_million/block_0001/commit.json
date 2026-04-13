@@ -1,0 +1,11 @@
+{
+  "block_number": 1,
+  "pre_state_root": "bc4983c8a4cd29beed29aaec37a232670b57083b38bcc93accf8269fbe9e615b",
+  "post_state_root": "c0e0c969b9b1b8588b8d2b9cb62a1b477726fbb5a8bd15c0eb22b8525c1a011e",
+  "tx_hash": "065dbeb5b3b438d585182d1ed05c24e930ee6a9c09d3bce2f43c548a0f11b654",
+  "txs_applied": 1000000,
+  "txs_total": 1000000,
+  "native_execution_us": 209313,
+  "network_prove_us": 121203110,
+  "verify_us": 40126
+}
