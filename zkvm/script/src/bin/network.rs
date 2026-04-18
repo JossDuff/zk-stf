@@ -9,7 +9,7 @@
 //!     --num-blocks 100 --num-txs 1000000 --num-accounts 10000 --workload-dir workloads/run1
 
 use clap::Parser;
-use ledger_lib::{apply_block, compute_state_root, hash_transactions, BlockCommit, State, Tx};
+use ledger_core::{apply_block, compute_state_root, hash_transactions, BlockCommit, State, Tx};
 use serde::{Deserialize, Serialize};
 use sp1_sdk::{
     include_elf, network::NetworkMode, Elf, ProveRequest, Prover, ProverClient, ProvingKey,

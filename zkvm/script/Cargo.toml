@@ -16,12 +16,8 @@ path = "src/bin/vkey.rs"
 name = "network"
 path = "src/bin/network.rs"
 
-[[bin]]
-name = "run-workload"
-path = "src/bin/run_workload.rs"
-
 [dependencies]
-sp1-sdk = { version = "6.0.1", features = ["blocking", "native-gnark", "network"] }
+sp1-sdk = { version = "6.1.0", features = ["blocking", "native-gnark", "network"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -29,8 +25,8 @@ bincode = "1.3"
 clap = { version = "4.0", features = ["derive", "env"] }
 tracing = "0.1.40"
 hex = "0.4.3"
-ledger-lib = { path = "../lib" }
+ledger-core = { workspace = true }
 dotenv = "0.15.0"
 
 [build-dependencies]
-sp1-build = { version = "6.0.1" }
+sp1-build = { version = "6.1.0" }

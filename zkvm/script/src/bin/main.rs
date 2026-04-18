@@ -1,5 +1,5 @@
 use clap::Parser;
-use ledger_lib::{apply_block, compute_state_root, hash_transactions, BlockCommit, State, Tx};
+use ledger_core::{apply_block, compute_state_root, hash_transactions, BlockCommit, State, Tx};
 use sp1_sdk::{
     blocking::{ProveRequest, Prover, ProverClient},
     include_elf, Elf, ProvingKey, SP1Stdin,

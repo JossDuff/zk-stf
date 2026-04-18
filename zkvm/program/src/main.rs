@@ -1,7 +1,7 @@
 #![no_main]
 sp1_zkvm::entrypoint!(main);
 
-use ledger_lib::{apply_block, compute_state_root, hash_transactions, BlockCommit, State, Tx};
+use ledger_core::{apply_block, compute_state_root, hash_transactions, BlockCommit, State, Tx};
 
 pub fn main() {
     let state: State = sp1_zkvm::io::read();
