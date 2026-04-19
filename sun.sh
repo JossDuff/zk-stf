@@ -2,9 +2,16 @@
 #
 # sun.sh - Deploy and run zk-stf consensus-node across the Sunlab cluster.
 #
-# Two-phase flow for `run`:
-#   1. prep (per-node, parallel): rsync workload to /scratch, ensure rust 1.91
-#      + protoc on /scratch, build consensus-node into /scratch target dir
+# RUN THIS FROM A SUNLAB COMPUTE NODE, not locally. Passwordless SSH to other
+# compute nodes is only available from inside the cluster.
+#
+# Prereq: run ./deploy-remote.sh locally first to push sources to NFS home
+# (~/cse476/zk-stf) and the target workload to THIS machine's /scratch.
+# Then ssh to that machine, cd into ~/cse476/zk-stf, and run sun.sh.
+#
+# Two-phase `run`:
+#   1. prep (per-node, parallel): rsync workload from local /scratch to target
+#      /scratch, ensure rust 1.91 + protoc on /scratch, build consensus-node
 #   2. launch (per-node, parallel): exec consensus-node with peer list
 #
 # See plans/sun.md for design notes.
@@ -21,6 +28,13 @@ RUSTUP_HOME_REMOTE="/scratch/.rustup/${USERNAME}"
 TARGET_DIR="${CARGO_HOME_REMOTE}/target"
 PROTOC_BIN_REMOTE="/scratch/protoc/bin/protoc"
 RUST_VERSION="1.91.0"
+
+# Shared SSH options: never prompt, don't check host IP (sunlab hostname/IP
+# pairs drift), and quietly accept unknown host keys (intra-cluster trust).
+SSH_OPTS="-o StrictHostKeyChecking=no -o CheckHostIP=no -o BatchMode=yes"
+# rsync invocations must pipe ssh options through -e since rsync forks its
+# own ssh and doesn't inherit command-line options otherwise.
+RSYNC_SSH="ssh ${SSH_OPTS}"
 
 # All known Sunlab compute nodes (login node `sunlab` excluded — it's per-machine /scratch)
 ALL_NODES=(
@@ -79,9 +93,7 @@ probe_node() {
     local node=$1
     local host="${node}.${DOMAIN}"
 
-    local result=$(ssh -o StrictHostKeyChecking=no \
-        -o ConnectTimeout=3 \
-        -o BatchMode=yes \
+    local result=$(ssh $SSH_OPTS -o ConnectTimeout=3 \
         "${USERNAME}@${host}" \
         "load=\$(cat /proc/loadavg | cut -d' ' -f1); \
          if ss -tlnp 2>/dev/null | grep -q ':${PORT} ' || netstat -tlnp 2>/dev/null | grep -q ':${PORT} '; then \
@@ -168,7 +180,7 @@ cmd_cleanup() {
     for node in "${ALL_NODES[@]}"; do
         local host="${node}.${DOMAIN}"
         (
-            result=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=3 -o BatchMode=yes \
+            result=$(ssh $SSH_OPTS -o ConnectTimeout=3 \
                 "${USERNAME}@${host}" "pkill -u $USERNAME -x consensus-node 2>/dev/null && echo killed" 2>/dev/null)
             if [[ -n "$result" ]]; then
                 echo -e "${YELLOW}[$node]${NC} killed"
@@ -182,36 +194,36 @@ cmd_cleanup() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Run: sync → prep → launch
+# Run: prep → launch
+#
+# Sources are expected to already be on NFS home (~/cse476/zk-stf), placed
+# there by deploy-remote.sh running locally. The workload is expected to
+# already be at /scratch/workloads/<name>/ on THIS machine (same origin).
+# prep_node propagates that workload dir to each selected peer's /scratch.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Rsync sources to NFS home (one-shot, shared across all selected nodes).
-sync_sources() {
-    echo -e "${CYAN}==> Syncing sources to ${USERNAME}@sunlab.${DOMAIN}:${NFS_REPO}${NC}"
-    ssh -o StrictHostKeyChecking=no -o BatchMode=no \
-        "${USERNAME}@sunlab.${DOMAIN}" "mkdir -p ${NFS_REPO}" >/dev/null
-    rsync -az --human-readable \
-        --exclude='target/' --exclude='workloads/' --exclude='logs/' --exclude='.git/' \
-        Cargo.toml Cargo.lock crates node zkvm install-protoc.sh \
-        "${USERNAME}@sunlab.${DOMAIN}:${NFS_REPO}/"
-}
-
-# Prep one node: workload rsync + rust/protoc bootstrap + cargo build.
+# Prep one node: workload rsync (from this machine) + rust/protoc bootstrap + cargo build.
 # Logs to ${LOG_DIR}/${node}-prep.log. Returns nonzero on failure.
 prep_node() {
     local node=$1
     local workload=$2
     local host="${node}.${DOMAIN}"
     local log_file="${LOG_DIR}/${node}-prep.log"
+    local self_short
+    self_short="$(hostname -s)"
 
     {
-        echo "=== [$(date +%H:%M:%S)] Workload rsync: $workload → /scratch/workloads/ on $node ==="
-        ssh -o StrictHostKeyChecking=no "${USERNAME}@${host}" "mkdir -p /scratch/workloads"
-        rsync -az --human-readable "workloads/${workload}" "${USERNAME}@${host}:/scratch/workloads/"
+        if [[ "$node" == "$self_short" ]]; then
+            echo "=== [$(date +%H:%M:%S)] Workload rsync skipped (this is the source machine) ==="
+        else
+            echo "=== [$(date +%H:%M:%S)] Workload rsync: /scratch/workloads/$workload → $node:/scratch/workloads/ ==="
+            ssh $SSH_OPTS "${USERNAME}@${host}" "mkdir -p /scratch/workloads"
+            rsync -az --human-readable -e "$RSYNC_SSH" "/scratch/workloads/${workload}" "${USERNAME}@${host}:/scratch/workloads/"
+        fi
 
         echo ""
         echo "=== [$(date +%H:%M:%S)] Remote bootstrap + build on $node ==="
-        ssh -o StrictHostKeyChecking=no "${USERNAME}@${host}" "bash -s" <<REMOTE_EOF
+        ssh $SSH_OPTS "${USERNAME}@${host}" "bash -s" <<REMOTE_EOF
 set -e
 
 export RUSTUP_HOME=${RUSTUP_HOME_REMOTE}
@@ -275,13 +287,14 @@ cmd_run() {
     local mode=$4
     local slow_delay_ms=$5
 
-    # Validate workload.
-    if [[ ! -d "workloads/${workload}" ]]; then
-        echo -e "${RED}Error: workloads/${workload} not found${NC}" >&2
+    # Validate workload is present on THIS machine's /scratch (deploy-remote.sh put it here).
+    if [[ ! -d "/scratch/workloads/${workload}" ]]; then
+        echo -e "${RED}Error: /scratch/workloads/${workload} not found on $(hostname -s)${NC}" >&2
+        echo -e "${RED}Run deploy-remote.sh locally first (SUNLAB_MACHINE_NAME=$(hostname -s))${NC}" >&2
         exit 1
     fi
-    if [[ ! -f "workloads/${workload}/ledger-program.elf" ]]; then
-        echo -e "${RED}Error: workloads/${workload}/ledger-program.elf missing${NC}" >&2
+    if [[ ! -f "/scratch/workloads/${workload}/ledger-program.elf" ]]; then
+        echo -e "${RED}Error: /scratch/workloads/${workload}/ledger-program.elf missing${NC}" >&2
         exit 1
     fi
 
@@ -295,17 +308,15 @@ cmd_run() {
 
     cat >"$LOG_DIR/run_info.txt" <<EOF
 Run started: $(date)
+source_host=$(hostname -s)
 n=${num_nodes} ns=${num_slow} mode=${mode} workload=${workload} slow_delay_ms=${slow_delay_ms}
 EOF
 
-    # 1) Source sync.
-    sync_sources
-
-    # 2) Node selection.
+    # 1) Node selection.
     echo ""
     mapfile -t nodes < <(select_nodes "$num_nodes")
 
-    # 3) Parallel per-node prep.
+    # 2) Parallel per-node prep.
     echo ""
     echo -e "${CYAN}==> Prep phase (rsync workload, install rust+protoc, cargo build)${NC}"
     echo -e "${CYAN}    Tailing: tail -f ${LOG_DIR}/<node>-prep.log${NC}"
@@ -333,7 +344,7 @@ EOF
         exit 1
     fi
 
-    # 4) Launch phase.
+    # 3) Launch phase.
     echo ""
     echo -e "${GREEN}=== Launching consensus-node on ${num_nodes} machines ===${NC}"
     echo -e "  mode:            ${BLUE}${mode}${NC}"
@@ -350,7 +361,7 @@ EOF
             kill "${PIDS[$node]}" 2>/dev/null && echo -e "${YELLOW}[$node]${NC} stopped (local ssh)"
         done
         for node in "${nodes[@]}"; do
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes \
+            ssh $SSH_OPTS -o ConnectTimeout=5 \
                 "${USERNAME}@${node}.${DOMAIN}" \
                 "pkill -u $USERNAME -x consensus-node" 2>/dev/null
         done
@@ -387,7 +398,7 @@ EOF
 
         echo -e "${YELLOW}[$node]${NC} id=${i} speed=${speed} peers=${peers}"
 
-        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+        ssh $SSH_OPTS -o ConnectTimeout=10 \
             "${USERNAME}@${host}" \
             ". ${CARGO_HOME_REMOTE}/env 2>/dev/null; exec $cmd" \
             >"$log_file" 2>&1 &

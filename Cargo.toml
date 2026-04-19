@@ -4,6 +4,7 @@ members = [
     "zkvm/program",
     "zkvm/script",
     "node/run-workload",
+    "node/consensus-node",
 ]
 resolver = "2"
 
