@@ -109,6 +109,18 @@ async fn main() {
     // Create workload directory structure.
     fs::create_dir_all(&args.workload_dir).expect("failed to create workload directory");
 
+    // Write the ELF alongside the blocks so verifying nodes load exactly the
+    // binary that was used to derive the vk baked into these proofs. Skipping
+    // this (or copying a freshly-rebuilt ELF over it later) yields
+    // `invalid public values: sp1 vk hash mismatch` at verify time.
+    let elf_path = args.workload_dir.join("ledger-program.elf");
+    fs::write(&elf_path, &*LEDGER_ELF).expect("failed to write ELF");
+    println!(
+        "Wrote ELF: {} ({} bytes)",
+        elf_path.display(),
+        LEDGER_ELF.len()
+    );
+
     // Write manifest.
     let manifest = Manifest {
         num_accounts: args.num_accounts,
