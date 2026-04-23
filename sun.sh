@@ -345,7 +345,7 @@ EOF
             echo -e "${GREEN}[$node]${NC} prep done"
         else
             echo -e "${RED}[$node]${NC} prep FAILED (see ${log_dir}/${node}-prep.log)"
-            ((prep_failed++))
+            ((++prep_failed))
         fi
     done
 
@@ -414,23 +414,42 @@ EOF
     echo -e "${GREEN}All nodes started. Waiting for completion (Ctrl+C to stop).${NC}"
     echo ""
 
+    # Wait for jobs to finish one at a time. On the FIRST failure, pkill
+    # consensus-node on every host so the surviving nodes — which would
+    # otherwise wait forever for a dead leader's Propose — exit immediately
+    # and unblock the remaining waits. Per-node success/failure is logged
+    # only after the loop, since wait -n doesn't identify which job finished.
+    local total=${#PIDS[@]}
+    local done_count=0
     local failed=0
-    for node in "${!PIDS[@]}"; do
-        if wait "${PIDS[$node]}"; then
-            echo -e "${GREEN}[$node]${NC} completed"
-        else
-            echo -e "${RED}[$node]${NC} failed"
-            ((failed++))
+    while (( done_count < total )); do
+        local s=0
+        wait -n || s=$?
+        ((++done_count))
+        if (( s != 0 )); then
+            ((++failed))
+            if (( failed == 1 )); then
+                echo -e "${RED}a node failed — killing remote consensus-node to unblock the rest${NC}"
+                _kill_remote_nodes
+            fi
         fi
     done
 
     trap - SIGINT SIGTERM
 
+    for node in "${!PIDS[@]}"; do
+        if kill -0 "${PIDS[$node]}" 2>/dev/null; then
+            # Shouldn't happen after the wait loop, but be defensive.
+            kill "${PIDS[$node]}" 2>/dev/null || true
+        fi
+    done
+
     if (( failed > 0 )); then
-        # Best-effort kill of any lingering consensus-node still running on the hosts.
+        echo -e "${RED}${failed}/${total} node(s) failed${NC}"
         _kill_remote_nodes
         return 1
     fi
+    echo -e "${GREEN}all ${total} nodes completed${NC}"
     return 0
 }
 
@@ -485,10 +504,13 @@ _append_summary_rows() {
         fi
         local blocks="" txs="" wall="" throughput=""
         if [[ -n "$summary_line" ]]; then
-            blocks=$(echo "$summary_line"     | grep -oE 'blocks=[0-9]+'         | cut -d= -f2)
-            txs=$(echo "$summary_line"        | grep -oE 'txs=[0-9]+'            | cut -d= -f2)
-            wall=$(echo "$summary_line"       | grep -oE 'wall=[0-9.]+[a-zµ]+'   | cut -d= -f2)
-            throughput=$(echo "$summary_line" | grep -oE 'throughput=[0-9.]+'    | cut -d= -f2)
+            # Example summary (on stderr, captured in log via 2>&1):
+            # [node 0] ===== summary: blocks=5 txs=5000000 validate_total=892.3ms wall=1.85s throughput=2689382.85 tx/s
+            # wall's unit can be s/ms/µs/ns — match up to the next space.
+            blocks=$(echo "$summary_line"     | grep -oE 'blocks=[0-9]+'      | cut -d= -f2)
+            txs=$(echo "$summary_line"        | grep -oE ' txs=[0-9]+'        | cut -d= -f2)
+            wall=$(echo "$summary_line"       | grep -oE 'wall=[^ ]+'         | cut -d= -f2)
+            throughput=$(echo "$summary_line" | grep -oE 'throughput=[0-9.]+' | cut -d= -f2)
         fi
         echo "${workload},${mode},${node},${i},${speed},${status},${blocks},${txs},${wall},${throughput}" >>"$csv"
     done
@@ -555,7 +577,7 @@ EOF
 
     for workload in "${WORKLOADS[@]}"; do
         for mode in "${modes[@]}"; do
-            ((idx++))
+            ((++idx))
             local run_log_dir="${sweep_dir}/${workload}-${mode}"
             _log_progress "[${idx}/${total}] workload=${workload} mode=${mode} starting..."
 
@@ -564,7 +586,7 @@ EOF
                 _log_progress "[${idx}/${total}] workload=${workload} mode=${mode} DONE"
             else
                 status="FAILED"
-                ((fail_count++))
+                ((++fail_count))
                 touch "${run_log_dir}/FAILED"
                 _log_progress "[${idx}/${total}] workload=${workload} mode=${mode} FAILED (see ${run_log_dir})"
             fi
