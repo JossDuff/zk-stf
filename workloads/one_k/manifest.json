@@ -1,0 +1,6 @@
+{
+  "num_accounts": 10000,
+  "initial_balance": 10000,
+  "num_txs_per_block": 1000,
+  "num_blocks": 5
+}
