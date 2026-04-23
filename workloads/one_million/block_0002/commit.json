@@ -5,7 +5,7 @@
   "tx_hash": "ea021c45c79b96b9ef803a0d2b8fc493672dca360f1bf66a98833b39cd376323",
   "txs_applied": 1000000,
   "txs_total": 1000000,
-  "native_execution_us": 244856,
-  "network_prove_us": 87519260,
-  "verify_us": 35863
+  "native_execution_us": 205252,
+  "network_prove_us": 89738938,
+  "verify_us": 29933
 }
