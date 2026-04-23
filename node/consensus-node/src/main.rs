@@ -14,7 +14,7 @@
 //!
 //! Validation dispatch:
 //!   fast + *         → apply_block
-//!   slow + reexecute → apply_block + sleep(slow_delay_ms)
+//!   slow + reexecute → apply_block + sleep(slow_delay_per_tx_ns * txs_total)
 //!   slow + verify    → client.verify(proof); chain via BlockCommit
 
 use clap::{Parser, ValueEnum};
@@ -71,9 +71,11 @@ struct Args {
     #[arg(long)]
     workloads_dir: PathBuf,
 
-    /// Per-block sleep in ms for slow + reexecute mode.
+    /// Per-tx sleep in ns for slow + reexecute mode. Total per-block sleep =
+    /// this * txs_total, emulating a machine whose execution time scales
+    /// linearly with block size.
     #[arg(long, default_value_t = 0)]
-    slow_delay_ms: u64,
+    slow_delay_per_tx_ns: u64,
 }
 
 #[derive(Deserialize)]
@@ -583,8 +585,9 @@ async fn main() {
                     apply_block(s, &txs);
                 });
 
-                if slow_reexec && args.slow_delay_ms > 0 {
-                    sleep(Duration::from_millis(args.slow_delay_ms)).await;
+                if slow_reexec && args.slow_delay_per_tx_ns > 0 {
+                    let delay_ns = args.slow_delay_per_tx_ns * meta.txs_total as u64;
+                    sleep(Duration::from_nanos(delay_ns)).await;
                 }
             }
         }

@@ -65,15 +65,17 @@ Run options:
   -n <N>                Total nodes (required)
   -ns <NS>              Number of slow nodes (required, 0 <= NS <= N)
   -w, --workload <name> Workload dir under workloads/ (required), e.g. one_million
-  -v                    Proof-verify mode (default: re-execution)
-  --slow-delay-ms <ms>  Per-block sleep for slow nodes in re-execute mode (default: 500)
-  -h, --help            Show this help
+  -v                         Proof-verify mode (default: re-execution)
+  --slow-delay-per-tx-ns <n> Per-tx sleep (ns) for slow nodes in re-execute mode;
+                             total per-block sleep = n * txs_total (default: 500,
+                             i.e. 500ms for a 1M-tx block)
+  -h, --help                 Show this help
 
 Examples:
   sun.sh list
   sun.sh run -n 4 -ns 2 -w one_million
   sun.sh run -n 4 -ns 2 -v -w one_million
-  sun.sh run -n 4 -ns 2 -w one_million --slow-delay-ms 1000
+  sun.sh run -n 4 -ns 2 -w one_million --slow-delay-per-tx-ns 1000
   sun.sh cleanup
 
 Node IDs are assigned 0..N-1 in select order. Slow nodes are IDs 0..NS-1.
@@ -285,7 +287,7 @@ cmd_run() {
     local num_slow=$2
     local workload=$3
     local mode=$4
-    local slow_delay_ms=$5
+    local slow_delay_per_tx_ns=$5
 
     # Validate workload is present on THIS machine's /scratch (deploy-remote.sh put it here).
     if [[ ! -d "/scratch/workloads/${workload}" ]]; then
@@ -309,7 +311,7 @@ cmd_run() {
     cat >"$LOG_DIR/run_info.txt" <<EOF
 Run started: $(date)
 source_host=$(hostname -s)
-n=${num_nodes} ns=${num_slow} mode=${mode} workload=${workload} slow_delay_ms=${slow_delay_ms}
+n=${num_nodes} ns=${num_slow} mode=${mode} workload=${workload} slow_delay_per_tx_ns=${slow_delay_per_tx_ns}
 EOF
 
     # 1) Node selection.
@@ -349,7 +351,7 @@ EOF
     echo -e "${GREEN}=== Launching consensus-node on ${num_nodes} machines ===${NC}"
     echo -e "  mode:            ${BLUE}${mode}${NC}"
     echo -e "  workload:        ${BLUE}${workload}${NC}"
-    echo -e "  slow_delay_ms:   ${BLUE}${slow_delay_ms}${NC}"
+    echo -e "  slow_delay_per_tx_ns: ${BLUE}${slow_delay_per_tx_ns}${NC}"
     echo ""
 
     declare -A PIDS
@@ -393,7 +395,7 @@ EOF
         cmd+=" --workload ${workload}"
         cmd+=" --workloads-dir /scratch/workloads"
         if [[ "$speed" == "slow" && "$mode" == "reexecute" ]]; then
-            cmd+=" --slow-delay-ms ${slow_delay_ms}"
+            cmd+=" --slow-delay-per-tx-ns ${slow_delay_per_tx_ns}"
         fi
 
         echo -e "${YELLOW}[$node]${NC} id=${i} speed=${speed} peers=${peers}"
@@ -443,7 +445,7 @@ NUM_NODES=""
 NUM_SLOW=""
 WORKLOAD=""
 MODE="reexecute"
-SLOW_DELAY_MS="500"
+SLOW_DELAY_PER_TX_NS="500"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -463,8 +465,8 @@ while [[ $# -gt 0 ]]; do
         MODE="verify"
         shift
         ;;
-    --slow-delay-ms)
-        SLOW_DELAY_MS="$2"
+    --slow-delay-per-tx-ns)
+        SLOW_DELAY_PER_TX_NS="$2"
         shift 2
         ;;
     -h | --help)
@@ -502,11 +504,11 @@ run)
         echo -e "${RED}Error: -ns must be a non-negative integer${NC}"
         exit 1
     fi
-    if ! [[ "$SLOW_DELAY_MS" =~ ^[0-9]+$ ]]; then
-        echo -e "${RED}Error: --slow-delay-ms must be a non-negative integer${NC}"
+    if ! [[ "$SLOW_DELAY_PER_TX_NS" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Error: --slow-delay-per-tx-ns must be a non-negative integer${NC}"
         exit 1
     fi
-    cmd_run "$NUM_NODES" "$NUM_SLOW" "$WORKLOAD" "$MODE" "$SLOW_DELAY_MS"
+    cmd_run "$NUM_NODES" "$NUM_SLOW" "$WORKLOAD" "$MODE" "$SLOW_DELAY_PER_TX_NS"
     ;;
 cleanup)
     cmd_cleanup
