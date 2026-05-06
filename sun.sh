@@ -70,6 +70,9 @@ Run/sweep options:
   --slow-delay-per-tx-ns <n> Per-tx sleep (ns) for slow nodes in re-execute mode;
                              total per-block sleep = n * txs_total (default: 500,
                              i.e. 500ms for a 1M-tx block)
+  --timeout-base-ms <n>      Initial HotStuff NEXTVIEW timeout (ms). Per paper
+                             Section 6, the Pacemaker doubles this on each
+                             unsuccessful view; resets on each commit. (default: 1000)
   -h, --help                 Show this help
 
 Examples:
@@ -311,13 +314,14 @@ _kill_remote_nodes() {
 
 # Run one experiment (prep + launch + wait) against the current SELECTED_NODES.
 # Returns 0 on success, nonzero if prep or any launched node failed.
-# Args: log_dir workload mode slow_delay_per_tx_ns num_slow
+# Args: log_dir workload mode slow_delay_per_tx_ns num_slow timeout_base_ms
 _do_run() {
     local log_dir=$1
     local workload=$2
     local mode=$3
     local slow_delay_per_tx_ns=$4
     local num_slow=$5
+    local timeout_base_ms=$6
 
     mkdir -p "$log_dir"
 
@@ -325,7 +329,7 @@ _do_run() {
 Run started: $(date)
 source_host=$(hostname -s)
 nodes=${SELECTED_NODES[*]}
-n=${#SELECTED_NODES[@]} ns=${num_slow} mode=${mode} workload=${workload} slow_delay_per_tx_ns=${slow_delay_per_tx_ns}
+n=${#SELECTED_NODES[@]} ns=${num_slow} mode=${mode} workload=${workload} slow_delay_per_tx_ns=${slow_delay_per_tx_ns} timeout_base_ms=${timeout_base_ms}
 EOF
 
     # Prep phase
@@ -397,6 +401,7 @@ EOF
         cmd+=" --mode ${mode}"
         cmd+=" --workload ${workload}"
         cmd+=" --workloads-dir /scratch/workloads"
+        cmd+=" --timeout-base-ms ${timeout_base_ms}"
         if [[ "$speed" == "slow" && "$mode" == "reexecute" ]]; then
             cmd+=" --slow-delay-per-tx-ns ${slow_delay_per_tx_ns}"
         fi
@@ -459,6 +464,7 @@ cmd_run() {
     local workload=$3
     local mode=$4
     local slow_delay_per_tx_ns=$5
+    local timeout_base_ms=$6
 
     _validate_workload_local "$workload"
 
@@ -473,7 +479,7 @@ cmd_run() {
     echo ""
     mapfile -t SELECTED_NODES < <(select_nodes "$num_nodes")
 
-    if _do_run "$LOG_DIR" "$workload" "$mode" "$slow_delay_per_tx_ns" "$num_slow"; then
+    if _do_run "$LOG_DIR" "$workload" "$mode" "$slow_delay_per_tx_ns" "$num_slow" "$timeout_base_ms"; then
         echo ""
         echo -e "${GREEN}=== Run Complete ===${NC}"
     else
@@ -521,6 +527,7 @@ cmd_sweep() {
     local num_slow=$2
     local workloads_csv=$3
     local slow_delay_per_tx_ns=$4
+    local timeout_base_ms=$5
 
     IFS=',' read -r -a WORKLOADS <<<"$workloads_csv"
 
@@ -551,7 +558,7 @@ cmd_sweep() {
 Sweep started: $(date)
 source_host=$(hostname -s)
 workloads=${workloads_csv}
-n=${num_nodes} ns=${num_slow} slow_delay_per_tx_ns=${slow_delay_per_tx_ns}
+n=${num_nodes} ns=${num_slow} slow_delay_per_tx_ns=${slow_delay_per_tx_ns} timeout_base_ms=${timeout_base_ms}
 EOF
 
     echo "workload,mode,node,node_id,speed,status,blocks,txs,wall,throughput_tx_per_s" >"$summary_csv"
@@ -582,7 +589,7 @@ EOF
             _log_progress "[${idx}/${total}] workload=${workload} mode=${mode} starting..."
 
             local status="OK"
-            if _do_run "$run_log_dir" "$workload" "$mode" "$slow_delay_per_tx_ns" "$num_slow"; then
+            if _do_run "$run_log_dir" "$workload" "$mode" "$slow_delay_per_tx_ns" "$num_slow" "$timeout_base_ms"; then
                 _log_progress "[${idx}/${total}] workload=${workload} mode=${mode} DONE"
             else
                 status="FAILED"
@@ -623,6 +630,7 @@ NUM_SLOW=""
 WORKLOAD=""
 MODE="reexecute"
 SLOW_DELAY_PER_TX_NS="500"
+TIMEOUT_BASE_MS="1000"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -644,6 +652,10 @@ while [[ $# -gt 0 ]]; do
         ;;
     --slow-delay-per-tx-ns)
         SLOW_DELAY_PER_TX_NS="$2"
+        shift 2
+        ;;
+    --timeout-base-ms)
+        TIMEOUT_BASE_MS="$2"
         shift 2
         ;;
     -h | --help)
@@ -685,7 +697,7 @@ run)
         echo -e "${RED}Error: --slow-delay-per-tx-ns must be a non-negative integer${NC}"
         exit 1
     fi
-    cmd_run "$NUM_NODES" "$NUM_SLOW" "$WORKLOAD" "$MODE" "$SLOW_DELAY_PER_TX_NS"
+    cmd_run "$NUM_NODES" "$NUM_SLOW" "$WORKLOAD" "$MODE" "$SLOW_DELAY_PER_TX_NS" "$TIMEOUT_BASE_MS"
     ;;
 sweep)
     if [[ -z "$NUM_NODES" ]]; then
@@ -712,7 +724,7 @@ sweep)
         echo -e "${RED}Error: --slow-delay-per-tx-ns must be a non-negative integer${NC}"
         exit 1
     fi
-    cmd_sweep "$NUM_NODES" "$NUM_SLOW" "$WORKLOAD" "$SLOW_DELAY_PER_TX_NS"
+    cmd_sweep "$NUM_NODES" "$NUM_SLOW" "$WORKLOAD" "$SLOW_DELAY_PER_TX_NS" "$TIMEOUT_BASE_MS"
     ;;
 cleanup)
     cmd_cleanup
