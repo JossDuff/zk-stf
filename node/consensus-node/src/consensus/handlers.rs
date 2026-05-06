@@ -161,8 +161,7 @@ pub async fn handle_msg(
                         // firing, so a DECIDE that arrives after we've
                         // advanced past `view` (e.g. via NEXTVIEW timing
                         // out mid-COMMIT) still drives `retry_pending_execute`.
-                        rs.decided_nodes
-                            .insert(justify.node_hash, justify.clone());
+                        rs.decided_nodes.insert(justify.node_hash);
                         rs.staged_decide_qc.insert(view, justify);
                     }
                 }
@@ -322,7 +321,6 @@ pub(super) fn enter_new_view(rs: &mut ReplicaState, new_view: u64, w: &Wiring<'_
         serde_json::json!({ "to": next_leader, "from_view": prev_view }),
     );
 
-    rs.vd_mut(new_view).timer_armed = true;
     arm_timer(
         TimerEvent { view: new_view },
         rs.timeout_interval_ms,

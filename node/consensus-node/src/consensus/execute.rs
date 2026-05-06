@@ -92,7 +92,6 @@ pub(super) fn try_execute_chain(
         }
 
         rs.last_executed_height = target_height as i64;
-        rs.committed_at_height.insert(target_height, nh);
         log_event(
             w.my_id,
             rs.view,
@@ -118,7 +117,7 @@ pub(super) fn retry_pending_execute(
     live_state: &mut State,
     chained_root: &mut [u8; 32],
 ) {
-    let hashes: Vec<[u8; 32]> = rs.decided_nodes.keys().copied().collect();
+    let hashes: Vec<[u8; 32]> = rs.decided_nodes.iter().copied().collect();
     for nh in hashes {
         try_execute_chain(rs, w, live_state, chained_root, nh);
     }

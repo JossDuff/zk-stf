@@ -12,7 +12,7 @@
 
 use crate::messages::{node_hash, Node, GENESIS_HASH, QC};
 use ledger_core::State;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Per-view fired-once event. Stale ones (view != current) are dropped
 /// in `consensus::handle_timer`.
@@ -32,7 +32,6 @@ pub struct ViewData {
     pub seen_pre_commit_qc: bool,
     pub seen_commit_qc: bool,
     pub seen_decide_qc: bool,
-    pub timer_armed: bool,
 
     // ── as a leader ──
     /// NEW-VIEW(view = this_view) messages from replicas; collected by the
@@ -49,8 +48,6 @@ pub struct ViewData {
 
 pub struct ReplicaState {
     pub n: u32,
-    #[allow(dead_code)]
-    pub f: u32,
     pub quorum: u32, // n - f
 
     pub view: u64,
@@ -75,13 +72,11 @@ pub struct ReplicaState {
     /// verify mode: pre-state root, checked against the chain at execute time.
     pub pre_root_by_node: HashMap<[u8; 32], [u8; 32]>,
 
-    /// Nodes for which we've seen a valid commitQC (DECIDE phase fired). The
-    /// node may or may not have been executed locally yet (depends on whether
-    /// validation has completed).
-    pub decided_nodes: HashMap<[u8; 32], QC>,
-
-    /// height -> node_hash that committed it. Built up at execute time.
-    pub committed_at_height: HashMap<u64, [u8; 32]>,
+    /// Hashes of nodes for which we've seen a valid commitQC (DECIDE phase
+    /// fired). The node may or may not have been executed locally yet —
+    /// `retry_pending_execute` walks this set to drive late application when
+    /// validation completes after DECIDE.
+    pub decided_nodes: HashSet<[u8; 32]>,
 
     /// QCs delivered via PhaseQc messages, indexed by view. Replica-side
     /// rules consume these in the corresponding phase.
@@ -100,7 +95,6 @@ impl ReplicaState {
         let quorum = n - f;
         Self {
             n,
-            f,
             quorum,
             view: 0, // becomes 1 when we enter the first view
             locked_qc: None,
@@ -113,8 +107,7 @@ impl ReplicaState {
             post_state_by_node: HashMap::new(),
             post_root_by_node: HashMap::new(),
             pre_root_by_node: HashMap::new(),
-            decided_nodes: HashMap::new(),
-            committed_at_height: HashMap::new(),
+            decided_nodes: HashSet::new(),
             staged_pre_commit_qc: HashMap::new(),
             staged_commit_qc: HashMap::new(),
             staged_decide_qc: HashMap::new(),

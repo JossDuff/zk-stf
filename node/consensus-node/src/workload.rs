@@ -26,22 +26,15 @@ use std::path::{Path, PathBuf};
 pub struct Manifest {
     pub num_accounts: u32,
     pub initial_balance: u64,
-    #[allow(dead_code)]
-    pub num_txs_per_block: u32,
     pub num_blocks: u32,
 }
 
 #[derive(Deserialize)]
 pub struct BlockMeta {
-    #[allow(dead_code)]
+    /// Verified at load time against the directory name to catch workload
+    /// corruption (e.g., truncated rsync, swapped files between heights).
     pub block_number: u32,
-    #[allow(dead_code)]
-    pub pre_state_root: String,
-    #[allow(dead_code)]
-    pub post_state_root: String,
     pub tx_hash: String,
-    #[allow(dead_code)]
-    pub txs_applied: u32,
     pub txs_total: u32,
 }
 
@@ -84,6 +77,12 @@ fn block_at(workload_dir: &Path, height: u64) -> BlockRef {
             .expect("failed to read commit.json"),
     )
     .expect("failed to parse commit.json");
+    if meta.block_number as u64 != height {
+        panic!(
+            "workload corruption: {:?} is at height {} but commit.json says block_number={}",
+            block_dir, height, meta.block_number
+        );
+    }
     let mut cmd = [0u8; 32];
     hex::decode_to_slice(&meta.tx_hash, &mut cmd).unwrap_or_else(|e| {
         panic!(

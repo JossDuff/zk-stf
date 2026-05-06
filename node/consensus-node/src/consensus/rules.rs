@@ -389,7 +389,7 @@ pub(super) fn replica_decide(
         Some(q) => q,
         None => return,
     };
-    rs.decided_nodes.insert(qc.node_hash, qc.clone());
+    rs.decided_nodes.insert(qc.node_hash);
 
     try_execute_chain(rs, w, live_state, chained_root, qc.node_hash);
 
