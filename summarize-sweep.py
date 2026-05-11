@@ -1,8 +1,23 @@
 #!/usr/bin/env python3
 """Summarize a sun.sh sweep directory.
 
-Prints per-workload throughput (reexecute vs verify) and per-node block-time
-stats, and writes a detailed block_times.csv alongside the sweep.
+Console output:
+  - Per-workload throughput table (reexecute vs verify, median tx/s).
+  - Per-(workload, mode, node) summary: blocks committed, total views used,
+    NEXTVIEW count, median validation and per-block times.
+
+CSV output (written into the sweep directory):
+  - block_times.csv:  per-(workload, mode, node, height) — first_view,
+                      commit_view, views_used, time_to_commit_ms, validate_ms.
+  - view_times.csv:   per-(workload, mode, node, view) — leader_id,
+                      leaf_height, start_ts_ns, end_ts_ns, duration_ms,
+                      outcome (decided / timed_out).
+  - view_votes.csv:   per-(workload, mode, node, view, phase) — whether the
+                      node sent the phase's vote, when, or why it skipped.
+                      Phases: prepare, pre_commit, commit.
+
+These three CSVs are tidy data — one row per observation — so they plug
+directly into pandas/ggplot/matplotlib for visualization.
 
 Usage:
     ./summarize-sweep.py logs/sweep-YYYYMMDD-HHMMSS
@@ -14,12 +29,15 @@ import sys
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 
-SUMMARY_RE = re.compile(
-    r"===== summary:\s+blocks=(\d+)\s+txs=(\d+)\s+"
-    r"validate_total=(\S+)\s+wall=(\S+)\s+throughput=([\d.]+)"
+
+LINE_RE = re.compile(
+    r"\[node (?P<node>\d+)\] view=(?P<view>\d+) (?P<event>\w+) "
+    r"ts_ns=(?P<ts>\d+)(?P<extras>.*)$"
 )
-EVENT_RE = re.compile(
-    r"round=(\d+)\s+(round_start|validate_start|validate_end|committed)\s+ts_ns=(\d+)"
+EXTRA_RE = re.compile(r"(\w+)=(\S+)")
+SUMMARY_RE = re.compile(
+    r"===== summary:\s+blocks=(\d+)\s+txs=(\d+)\s+wall=(\S+)\s+"
+    r"throughput=([\d.]+)"
 )
 DURATION_RE = re.compile(r"^([\d.]+)(ns|µs|us|ms|s)$")
 
@@ -39,11 +57,11 @@ def duration_to_ms(s):
 
 
 def parse_node_log(path):
-    """Extract summary line + per-round event timestamps from one node log."""
+    """Read one node's log; return (summary_dict_or_None, list-of-events)."""
     summary = None
-    rounds = defaultdict(dict)
+    events = []
     if not path.is_file():
-        return summary, rounds
+        return summary, events
     with path.open() as f:
         for line in f:
             m = SUMMARY_RE.search(line)
@@ -51,15 +69,120 @@ def parse_node_log(path):
                 summary = {
                     "blocks": int(m.group(1)),
                     "txs": int(m.group(2)),
-                    "validate_total_ms": duration_to_ms(m.group(3)),
-                    "wall_ms": duration_to_ms(m.group(4)),
-                    "throughput": float(m.group(5)),
+                    "wall_ms": duration_to_ms(m.group(3)),
+                    "throughput": float(m.group(4)),
                 }
                 continue
-            m = EVENT_RE.search(line)
+            m = LINE_RE.search(line)
             if m:
-                rounds[int(m.group(1))][m.group(2)] = int(m.group(3))
-    return summary, rounds
+                events.append((
+                    int(m.group("view")),
+                    m.group("event"),
+                    int(m.group("ts")),
+                    dict(EXTRA_RE.findall(m.group("extras"))),
+                ))
+    return summary, events
+
+
+def per_view_state(events):
+    """Roll events up by view: leader, leaf height, start/end timestamps,
+    outcome, and per-phase vote timestamps emitted by *this* node.
+
+    Phase-skip events (e.g., `prepare_skip`) are recorded too so we can
+    distinguish "didn't get there" from "voted no on purpose."
+    """
+    views = {}
+    for view, event, ts, extras in events:
+        v = views.setdefault(view, {
+            "start_ts": None,
+            "end_ts": None,
+            "leader": None,
+            "leaf_height": None,
+            "outcome": None,
+            "phase_votes": {},          # phase -> ts_ns
+            "phase_skip_reasons": {},   # phase -> reason string
+        })
+        if event == "view_start":
+            v["start_ts"] = ts
+            try:
+                v["leader"] = int(extras.get("leader", -1))
+            except ValueError:
+                v["leader"] = -1
+        elif event in ("propose_send", "propose_recv"):
+            if v["leaf_height"] is None:
+                try:
+                    v["leaf_height"] = int(extras.get("leaf_height", -1))
+                except ValueError:
+                    pass
+        elif event == "view_decide":
+            v["end_ts"] = ts
+            v["outcome"] = "decided"
+        elif event == "next_view":
+            v["end_ts"] = ts
+            v["outcome"] = "timed_out"
+        elif event == "prepare_vote_send":
+            v["phase_votes"]["prepare"] = ts
+        elif event == "pre_commit_vote_send":
+            v["phase_votes"]["pre_commit"] = ts
+        elif event == "commit_vote_send":
+            v["phase_votes"]["commit"] = ts
+        elif event == "prepare_skip":
+            v["phase_skip_reasons"]["prepare"] = extras.get("reason", "?")
+    return views
+
+
+def per_height_state(events):
+    """Roll events up by blockchain height: when first proposed, when
+    committed (executed), validation timing.
+    """
+    heights = {}
+
+    def hint(d, key):
+        try:
+            return int(d.get(key, -1))
+        except ValueError:
+            return -1
+
+    for view, event, ts, extras in events:
+        if event in ("propose_send", "propose_recv"):
+            h = hint(extras, "leaf_height")
+            if h < 0:
+                continue
+            d = heights.setdefault(h, {})
+            if "first_view" not in d:
+                d["first_view"] = view
+                d["first_ts"] = ts
+        elif event == "execute":
+            h = hint(extras, "height")
+            if h < 0:
+                continue
+            d = heights.setdefault(h, {})
+            d["commit_view"] = view
+            d["commit_ts"] = ts
+        elif event == "validate_start":
+            h = hint(extras, "height")
+            if h < 0:
+                continue
+            d = heights.setdefault(h, {})
+            if "validate_start_ts" not in d:
+                d["validate_start_ts"] = ts
+        elif event == "validate_end":
+            h = hint(extras, "height")
+            if h < 0:
+                continue
+            d = heights.setdefault(h, {})
+            d["validate_end_ts"] = ts
+            d["validate_kind"] = extras.get("kind")
+            d["validate_valid"] = extras.get("valid") == "true"
+
+    for d in heights.values():
+        if "first_ts" in d and "commit_ts" in d:
+            d["time_to_commit_ms"] = (d["commit_ts"] - d["first_ts"]) / 1e6
+        if "validate_start_ts" in d and "validate_end_ts" in d:
+            d["validate_ms"] = (d["validate_end_ts"] - d["validate_start_ts"]) / 1e6
+        if "first_view" in d and "commit_view" in d:
+            d["views_used"] = d["commit_view"] - d["first_view"] + 1
+    return heights
 
 
 def fmt_int(n):
@@ -99,46 +222,54 @@ def main():
         print(f"Missing {summary_csv}", file=sys.stderr)
         sys.exit(1)
 
-    # Load CSV rows, preserving workload order of first appearance.
-    rows_by_run = defaultdict(list)  # (workload, mode) -> list[row]
+    rows_by_run = defaultdict(list)
     workload_order = OrderedDict()
     with summary_csv.open() as f:
         for row in csv.DictReader(f):
             rows_by_run[(row["workload"], row["mode"])].append(row)
             workload_order.setdefault(row["workload"], None)
 
-    # Parse every node log once.
-    round_data = {}  # (workload, mode, node) -> {round: {event: ts_ns}}
+    # Parse every node log once; cache per (workload, mode, node).
+    node_data = {}  # -> (summary, views_dict, heights_dict)
     for (workload, mode), rows in rows_by_run.items():
         for row in rows:
             node = row["node"]
             log = sweep / f"{workload}-{mode}" / f"{node}.log"
-            _, rounds = parse_node_log(log)
-            round_data[(workload, mode, node)] = rounds
+            summary, events = parse_node_log(log)
+            node_data[(workload, mode, node)] = (
+                summary,
+                per_view_state(events),
+                per_height_state(events),
+            )
 
-    # ── Header ─────────────────────────────────────────────────────────────
+    # ── Header ────────────────────────────────────────────────────────────
     print(f"=== Sweep: {sweep.name} ===")
     if info_path.is_file():
         print(info_path.read_text().strip())
     print()
 
-    # ── Throughput table ───────────────────────────────────────────────────
+    # ── Throughput table ─────────────────────────────────────────────────
     def run_stats(rows):
-        """Median throughput + aggregate status for one run."""
-        throughputs = [float(r["throughput_tx_per_s"]) for r in rows if r["throughput_tx_per_s"]]
+        throughputs = [
+            float(r["throughput_tx_per_s"])
+            for r in rows
+            if r["throughput_tx_per_s"]
+        ]
         med = statistics.median(throughputs) if throughputs else None
         ok = bool(rows) and all(r["status"] == "OK" for r in rows)
         return med, "OK" if ok else "FAILED"
 
     print("=== Throughput (median across nodes, tx/s) ===")
-    print(f"{'Workload':<16} {'Tx/block':>10} {'Re-execute':>14} {'Verify':>14} {'V/R':>7}  Status")
+    print(
+        f"{'Workload':<16} {'Tx/block':>10} {'Re-execute':>14} "
+        f"{'Verify':>14} {'V/R':>7}  Status"
+    )
     for w in workload_order:
         r_rows = rows_by_run.get((w, "reexecute"), [])
         v_rows = rows_by_run.get((w, "verify"), [])
         tp_r, st_r = run_stats(r_rows)
         tp_v, st_v = run_stats(v_rows)
 
-        # Tx/block: pull from any OK row; blocks × tx_per_block = txs
         tx_per_block = None
         for r in r_rows + v_rows:
             if r["status"] == "OK" and r["blocks"] and r["txs"]:
@@ -147,66 +278,150 @@ def main():
 
         ratio = f"{tp_v/tp_r:.2f}x" if tp_r and tp_v else "-"
         status = f"R:{st_r} V:{st_v}"
-        print(f"{w:<16} {fmt_int(tx_per_block):>10} {fmt_int(tp_r):>14} {fmt_int(tp_v):>14} {ratio:>7}  {status}")
+        print(
+            f"{w:<16} {fmt_int(tx_per_block):>10} {fmt_int(tp_r):>14} "
+            f"{fmt_int(tp_v):>14} {ratio:>7}  {status}"
+        )
     print()
 
-    # ── Per-node block-time stats ──────────────────────────────────────────
-    print("=== Per-node block times (ms) ===")
+    # ── Per-node block & view stats ───────────────────────────────────────
+    print("=== Per-node block + view stats ===")
+    print("    Blks  = heights this node committed")
+    print("    Views = total views entered (incl. NEXTVIEW failures)")
+    print("    NextV = NEXTVIEW (timed-out) count")
+    print()
     for w in workload_order:
         for mode in ("reexecute", "verify"):
             rows = rows_by_run.get((w, mode), [])
             if not rows:
                 continue
-            print(f"\n--- {w} / {mode} ---")
+            print(f"--- {w} / {mode} ---")
             print(
-                f"{'Node':<12} {'Speed':<5} {'Blks':>4}  "
-                f"{'Validate min / med / max':>26}  "
-                f"{'Round min / med / max':>26}   Status"
+                f"{'Node':<12} {'Speed':<5} {'Blks':>4} {'Views':>5} {'NextV':>5}  "
+                f"{'Validate min/med/max (ms)':>30}  "
+                f"{'Block-time min/med/max (ms)':>30}   Status"
             )
-            # Sort by node_id so slow nodes come first
             rows_sorted = sorted(rows, key=lambda r: int(r["node_id"]))
             for r in rows_sorted:
                 node = r["node"]
-                rounds = round_data.get((w, mode, node), {})
-                v_times, r_times = [], []
-                for events in rounds.values():
-                    vs, ve = events.get("validate_start"), events.get("validate_end")
-                    rs, cm = events.get("round_start"), events.get("committed")
-                    if vs is not None and ve is not None:
-                        v_times.append((ve - vs) / 1e6)
-                    if rs is not None and cm is not None:
-                        r_times.append((cm - rs) / 1e6)
-                vmin, vmed, vmax = stats3(v_times)
-                rmin, rmed, rmax = stats3(r_times)
-                v_str = f"{vmin:>7} / {vmed:>7} / {vmax:>7}"
-                r_str = f"{rmin:>7} / {rmed:>7} / {rmax:>7}"
-                print(
-                    f"{node:<12} {r['speed']:<5} {len(r_times):>4}  "
-                    f"{v_str}  {r_str}   {r['status']}"
+                _, views, heights = node_data.get(
+                    (w, mode, node), (None, {}, {})
                 )
+                v_times = [
+                    d["validate_ms"] for d in heights.values() if "validate_ms" in d
+                ]
+                t_times = [
+                    d["time_to_commit_ms"]
+                    for d in heights.values()
+                    if "time_to_commit_ms" in d
+                ]
+                num_views_total = len(views)
+                num_next_view = sum(
+                    1 for vd in views.values() if vd["outcome"] == "timed_out"
+                )
+                vmin, vmed, vmax = stats3(v_times)
+                tmin, tmed, tmax = stats3(t_times)
+                print(
+                    f"{node:<12} {r['speed']:<5} {len(t_times):>4} "
+                    f"{num_views_total:>5} {num_next_view:>5}  "
+                    f"{vmin:>9} / {vmed:>9} / {vmax:>9}  "
+                    f"{tmin:>9} / {tmed:>9} / {tmax:>9}   {r['status']}"
+                )
+            print()
 
-    # ── Detail CSV ─────────────────────────────────────────────────────────
-    out_csv = sweep / "block_times.csv"
-    with out_csv.open("w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(
-            ["workload", "mode", "node", "node_id", "speed", "round", "validate_ms", "round_ms"]
-        )
+    # ── CSV: per-block ────────────────────────────────────────────────────
+    block_csv = sweep / "block_times.csv"
+    with block_csv.open("w", newline="") as f:
+        wr = csv.writer(f)
+        wr.writerow([
+            "workload", "mode", "node", "node_id", "speed",
+            "height", "first_view", "commit_view", "views_used",
+            "time_to_commit_ms", "validate_ms", "validate_kind", "validate_valid",
+        ])
         for (workload, mode), rows in rows_by_run.items():
             for row in rows:
-                rounds = round_data.get((workload, mode, row["node"]), {})
-                for rnum in sorted(rounds):
-                    events = rounds[rnum]
-                    vs, ve = events.get("validate_start"), events.get("validate_end")
-                    rs, cm = events.get("round_start"), events.get("committed")
-                    v_ms = (ve - vs) / 1e6 if vs is not None and ve is not None else ""
-                    r_ms = (cm - rs) / 1e6 if rs is not None and cm is not None else ""
-                    writer.writerow(
-                        [workload, mode, row["node"], row["node_id"], row["speed"], rnum, v_ms, r_ms]
-                    )
+                node = row["node"]
+                _, _, heights = node_data.get(
+                    (workload, mode, node), (None, {}, {})
+                )
+                for h in sorted(heights):
+                    d = heights[h]
+                    wr.writerow([
+                        workload, mode, node, row["node_id"], row["speed"], h,
+                        d.get("first_view", ""),
+                        d.get("commit_view", ""),
+                        d.get("views_used", ""),
+                        d.get("time_to_commit_ms", ""),
+                        d.get("validate_ms", ""),
+                        d.get("validate_kind", ""),
+                        d.get("validate_valid", ""),
+                    ])
 
-    print()
-    print(f"Wrote per-block detail → {out_csv.relative_to(sweep.parent.parent) if sweep.is_relative_to(sweep.parent.parent) else out_csv}")
+    # ── CSV: per-view ─────────────────────────────────────────────────────
+    view_csv = sweep / "view_times.csv"
+    with view_csv.open("w", newline="") as f:
+        wr = csv.writer(f)
+        wr.writerow([
+            "workload", "mode", "node", "node_id", "speed",
+            "view", "leader", "leaf_height",
+            "start_ts_ns", "end_ts_ns", "duration_ms", "outcome",
+        ])
+        for (workload, mode), rows in rows_by_run.items():
+            for row in rows:
+                node = row["node"]
+                _, views, _ = node_data.get(
+                    (workload, mode, node), (None, {}, {})
+                )
+                for v in sorted(views):
+                    d = views[v]
+                    duration_ms = (
+                        (d["end_ts"] - d["start_ts"]) / 1e6
+                        if d.get("start_ts") and d.get("end_ts")
+                        else ""
+                    )
+                    wr.writerow([
+                        workload, mode, node, row["node_id"], row["speed"], v,
+                        d.get("leader", ""),
+                        d.get("leaf_height", ""),
+                        d.get("start_ts", ""),
+                        d.get("end_ts", ""),
+                        duration_ms,
+                        d.get("outcome", ""),
+                    ])
+
+    # ── CSV: per-(node, view, phase) participation ────────────────────────
+    votes_csv = sweep / "view_votes.csv"
+    with votes_csv.open("w", newline="") as f:
+        wr = csv.writer(f)
+        wr.writerow([
+            "workload", "mode", "node", "node_id", "speed",
+            "view", "phase", "voted", "ts_ns", "skip_reason",
+        ])
+        for (workload, mode), rows in rows_by_run.items():
+            for row in rows:
+                node = row["node"]
+                _, views, _ = node_data.get(
+                    (workload, mode, node), (None, {}, {})
+                )
+                for v in sorted(views):
+                    d = views[v]
+                    for phase in ("prepare", "pre_commit", "commit"):
+                        ts = d["phase_votes"].get(phase)
+                        skip_reason = d["phase_skip_reasons"].get(phase, "")
+                        if ts is not None:
+                            voted = "yes"
+                        elif skip_reason:
+                            voted = "skipped"
+                        else:
+                            voted = "missed"
+                        wr.writerow([
+                            workload, mode, node, row["node_id"], row["speed"],
+                            v, phase, voted, ts or "", skip_reason,
+                        ])
+
+    print(f"Wrote {block_csv.name}")
+    print(f"Wrote {view_csv.name}")
+    print(f"Wrote {votes_csv.name}")
 
 
 if __name__ == "__main__":
