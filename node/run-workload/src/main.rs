@@ -95,6 +95,14 @@ fn main() {
         )
         .expect("failed to parse commit.json");
 
+        if meta.block_number != block_num {
+            eprintln!(
+                "workload corruption: block_dir {:?} but commit.json says block_number={}",
+                block_dir, meta.block_number
+            );
+            std::process::exit(1);
+        }
+
         let txs_bytes =
             fs::read(block_dir.join("transactions.bin")).expect("failed to read transactions.bin");
         let txs: Vec<Tx> =
@@ -110,6 +118,14 @@ fn main() {
         exec_times.push(exec_elapsed);
 
         println!("Execution: {:?} ({}/{} txs applied)", exec_elapsed, applied, meta.txs_total);
+
+        if applied != meta.txs_applied {
+            eprintln!(
+                "MISMATCH block {}: txs_applied\n  local:  {}\n  saved:  {}",
+                block_num, applied, meta.txs_applied
+            );
+            std::process::exit(1);
+        }
 
         let local_pre = hex::encode(pre_root);
         let local_post = hex::encode(post_root);

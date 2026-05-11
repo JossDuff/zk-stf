@@ -40,20 +40,22 @@ pub async fn handle_msg(
                 );
                 return;
             }
-            // justify (highQC) must verify (or be ⊥, only allowed at view 1).
+            // If a highQC is attached, it must verify. A missing highQC is
+            // legitimate at any view in which no prior view has reached
+            // PRE-COMMIT — the leader's argmax over n-f NEW-VIEW messages is
+            // just ⊥ when every replica's local prepareQC is still ⊥. The
+            // actual safety check (extends from lockedQC.node, or qc.view >
+            // lockedQC.view) is `safe_node`, which trivially returns true
+            // when lockedQC is None, and would correctly reject a ⊥ justify
+            // against a non-None lockedQC.
             if let Some(qc) = &justify {
                 if !verify_qc(qc, rs.quorum, peer_keys).await {
                     eprintln!("[node {}] reject Proposal: bad highQC sigs", w.my_id);
                     return;
                 }
-            } else if view != 1 {
-                eprintln!(
-                    "[node {}] reject Proposal: missing highQC at view={view}",
-                    w.my_id
-                );
-                return;
             }
-            // Tree consistency: leaf must extend from highQC.node (or genesis at view 1).
+            // Tree consistency: leaf must extend from highQC.node (or from
+            // genesis when justify is ⊥).
             let expected_parent = justify
                 .as_ref()
                 .map(|q| q.node_hash)
