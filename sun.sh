@@ -81,10 +81,13 @@ Examples:
   sun.sh run -n 4 -ns 2 -v -w one_million
   sun.sh sweep -n 4 -ns 2 -w one_k,ten_k,one_million
   sun.sh sweep -n 4 -ns 2 -w one_k,ten_k --slow-delay-per-tx-ns 1000
+  sun.sh sweep -n 4 -ns 2 -w one_million --timeout-base-ms 500
   sun.sh cleanup
 
 Node IDs are assigned 0..N-1 in select order. Slow nodes are IDs 0..NS-1.
-Round-robin leader = round % N, so slow nodes lead first.
+HotStuff leader for view v = (v-1) mod N, so the slow nodes (ids 0..NS-1)
+lead the first NS views and force NEXTVIEW timeouts before any block can
+commit — that's the point of the experiment.
 
 Logs:
   run:   logs/<node>-prep.log (setup) and logs/<node>.log (runtime)
@@ -511,7 +514,7 @@ _append_summary_rows() {
         local blocks="" txs="" wall="" throughput=""
         if [[ -n "$summary_line" ]]; then
             # Example summary (on stderr, captured in log via 2>&1):
-            # [node 0] ===== summary: blocks=5 txs=5000000 validate_total=892.3ms wall=1.85s throughput=2689382.85 tx/s
+            # [node 0] ===== summary: blocks=5 txs=5000000 wall=1.85s throughput=2689382.85 tx/s
             # wall's unit can be s/ms/µs/ns — match up to the next space.
             blocks=$(echo "$summary_line"     | grep -oE 'blocks=[0-9]+'      | cut -d= -f2)
             txs=$(echo "$summary_line"        | grep -oE ' txs=[0-9]+'        | cut -d= -f2)

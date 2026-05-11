@@ -58,9 +58,13 @@ enum Mode {
 
 #[derive(Parser, Debug)]
 struct Args {
+    /// This replica's id in [0, n). Determines round-robin leader rotation:
+    /// view v is led by node (v - 1) mod n.
     #[arg(long)]
     node_id: u32,
 
+    /// `fast` for full-speed validation; `slow` adds `slow_delay_per_tx_ns *
+    /// txs_total` of sleep during re-execute validation to model weaker hardware.
     #[arg(long, value_enum)]
     speed: Speed,
 
@@ -71,12 +75,17 @@ struct Args {
     #[arg(long, default_value_t = 1895)]
     port: u16,
 
+    /// Block validation strategy: `reexecute` applies the txs locally,
+    /// `verify` checks the SP1 proof in the block's proof.bin.
     #[arg(long, value_enum)]
     mode: Mode,
 
+    /// Workload name; resolves to `<workloads_dir>/<workload>/`.
     #[arg(long)]
     workload: String,
 
+    /// Directory containing one subdirectory per workload (each with
+    /// `manifest.json`, `ledger-program.elf`, and `block_NNNN/...`).
     #[arg(long)]
     workloads_dir: PathBuf,
 
