@@ -574,6 +574,16 @@ EOF
 
     _log_progress "sweep start: workloads=${workloads_csv} n=${num_nodes} ns=${num_slow} slow_delay_per_tx_ns=${slow_delay_per_tx_ns}"
 
+    # Kill any stale consensus-node left over from prior sessions BEFORE
+    # probing for least-loaded nodes — a leftover process bound to port 1895
+    # both skews load probing and (worse) can dial into the new sweep claiming
+    # an in-use node_id, overwriting that node's own pubkey in peer_keys and
+    # stalling consensus on bad-sig rejections. See sweep_failed/ for an
+    # instance: a stale eris process announced node_id=2 to cupid and
+    # poisoned the sweep.
+    _log_progress "pre-sweep cleanup: killing stale consensus-node across all known nodes"
+    cmd_cleanup >>"$progress_log" 2>&1
+
     # Select nodes ONCE — same set reused across every (workload × mode) for an
     # apples-to-apples comparison.
     echo ""
