@@ -248,42 +248,6 @@ def main():
         print(info_path.read_text().strip())
     print()
 
-    # ── Throughput table ─────────────────────────────────────────────────
-    def run_stats(rows):
-        throughputs = [
-            float(r["throughput_tx_per_s"])
-            for r in rows
-            if r["throughput_tx_per_s"]
-        ]
-        med = statistics.median(throughputs) if throughputs else None
-        ok = bool(rows) and all(r["status"] == "OK" for r in rows)
-        return med, "OK" if ok else "FAILED"
-
-    print("=== Throughput (median across nodes, tx/s) ===")
-    print(
-        f"{'Workload':<16} {'Tx/block':>10} {'Re-execute':>14} "
-        f"{'Verify':>14} {'V/R':>7}  Status"
-    )
-    for w in workload_order:
-        r_rows = rows_by_run.get((w, "reexecute"), [])
-        v_rows = rows_by_run.get((w, "verify"), [])
-        tp_r, st_r = run_stats(r_rows)
-        tp_v, st_v = run_stats(v_rows)
-
-        tx_per_block = None
-        for r in r_rows + v_rows:
-            if r["status"] == "OK" and r["blocks"] and r["txs"]:
-                tx_per_block = int(r["txs"]) // int(r["blocks"])
-                break
-
-        ratio = f"{tp_v/tp_r:.2f}x" if tp_r and tp_v else "-"
-        status = f"R:{st_r} V:{st_v}"
-        print(
-            f"{w:<16} {fmt_int(tx_per_block):>10} {fmt_int(tp_r):>14} "
-            f"{fmt_int(tp_v):>14} {ratio:>7}  {status}"
-        )
-    print()
-
     # ── Per-node block & view stats ───────────────────────────────────────
     print("=== Per-node block + view stats ===")
     print("    Blks  = heights this node committed")
@@ -422,6 +386,113 @@ def main():
     print(f"Wrote {block_csv.name}")
     print(f"Wrote {view_csv.name}")
     print(f"Wrote {votes_csv.name}")
+    print()
+
+    # ── Aggregate summaries ───────────────────────────────────────────────
+    # Helper: per-(workload, mode) median across nodes of each node's median
+    # of the values extracted by `extract(heights_dict)`.
+    def median_across_nodes(rows, mode, workload, extract):
+        per_node = []
+        for r in rows:
+            _, _, heights = node_data.get(
+                (workload, mode, r["node"]), (None, {}, {})
+            )
+            vals = extract(heights)
+            if vals:
+                per_node.append(statistics.median(vals))
+        return statistics.median(per_node) if per_node else None
+
+    def heights_block_times(heights):
+        return [d["time_to_commit_ms"] for d in heights.values() if "time_to_commit_ms" in d]
+
+    def heights_validate_times(heights):
+        return [d["validate_ms"] for d in heights.values() if "validate_ms" in d]
+
+    # ── Throughput table ─────────────────────────────────────────────────
+    def run_throughput(rows):
+        throughputs = [
+            float(r["throughput_tx_per_s"])
+            for r in rows
+            if r["throughput_tx_per_s"]
+        ]
+        med = statistics.median(throughputs) if throughputs else None
+        ok = bool(rows) and all(r["status"] == "OK" for r in rows)
+        return med, "OK" if ok else "FAILED"
+
+    print("=== Throughput (median across nodes, tx/s) ===")
+    print(
+        f"{'Workload':<16} {'Tx/block':>10} {'Re-execute':>14} "
+        f"{'Verify':>14} {'V/R':>7}  Status"
+    )
+    for w in workload_order:
+        r_rows = rows_by_run.get((w, "reexecute"), [])
+        v_rows = rows_by_run.get((w, "verify"), [])
+        tp_r, st_r = run_throughput(r_rows)
+        tp_v, st_v = run_throughput(v_rows)
+
+        tx_per_block = None
+        for r in r_rows + v_rows:
+            if r["status"] == "OK" and r["blocks"] and r["txs"]:
+                tx_per_block = int(r["txs"]) // int(r["blocks"])
+                break
+
+        ratio = f"{tp_v/tp_r:.2f}x" if tp_r and tp_v else "-"
+        status = f"R:{st_r} V:{st_v}"
+        print(
+            f"{w:<16} {fmt_int(tx_per_block):>10} {fmt_int(tp_r):>14} "
+            f"{fmt_int(tp_v):>14} {ratio:>7}  {status}"
+        )
+    print()
+
+    # ── Block-time table ─────────────────────────────────────────────────
+    print("=== Median block-time (median across nodes of each node's median, ms) ===")
+    print(
+        f"{'Workload':<16} {'Tx/block':>10} {'Re-execute':>14} "
+        f"{'Verify':>14} {'R/V':>7}"
+    )
+    for w in workload_order:
+        r_rows = rows_by_run.get((w, "reexecute"), [])
+        v_rows = rows_by_run.get((w, "verify"), [])
+        bt_r = median_across_nodes(r_rows, "reexecute", w, heights_block_times)
+        bt_v = median_across_nodes(v_rows, "verify", w, heights_block_times)
+
+        tx_per_block = None
+        for r in r_rows + v_rows:
+            if r["status"] == "OK" and r["blocks"] and r["txs"]:
+                tx_per_block = int(r["txs"]) // int(r["blocks"])
+                break
+
+        ratio = f"{bt_r/bt_v:.2f}x" if bt_r and bt_v else "-"
+        print(
+            f"{w:<16} {fmt_int(tx_per_block):>10} {fmt_ms(bt_r):>14} "
+            f"{fmt_ms(bt_v):>14} {ratio:>7}"
+        )
+    print()
+
+    # ── Validate-time table ──────────────────────────────────────────────
+    print("=== Median validate-time (median across nodes of each node's median, ms) ===")
+    print(
+        f"{'Workload':<16} {'Tx/block':>10} {'Re-execute':>14} "
+        f"{'Verify':>14} {'R/V':>7}"
+    )
+    for w in workload_order:
+        r_rows = rows_by_run.get((w, "reexecute"), [])
+        v_rows = rows_by_run.get((w, "verify"), [])
+        vt_r = median_across_nodes(r_rows, "reexecute", w, heights_validate_times)
+        vt_v = median_across_nodes(v_rows, "verify", w, heights_validate_times)
+
+        tx_per_block = None
+        for r in r_rows + v_rows:
+            if r["status"] == "OK" and r["blocks"] and r["txs"]:
+                tx_per_block = int(r["txs"]) // int(r["blocks"])
+                break
+
+        ratio = f"{vt_r/vt_v:.2f}x" if vt_r and vt_v else "-"
+        print(
+            f"{w:<16} {fmt_int(tx_per_block):>10} {fmt_ms(vt_r):>14} "
+            f"{fmt_ms(vt_v):>14} {ratio:>7}"
+        )
+    print()
 
 
 if __name__ == "__main__":
