@@ -3,10 +3,14 @@
 //! Implements Algorithm 2 from Yin/Malkhi/Reiter/Golan-Gueta/Abraham,
 //! "HotStuff: BFT Consensus with Linearity and Responsiveness," PODC 2019.
 //!
-//! Two block-validation modes via `--mode`:
-//!   - `reexecute`: apply_block on a clone of state (slow + reexecute also
-//!     sleeps `slow_delay_per_tx_ns * txs_total` to model weak hardware).
-//!   - `verify`: SP1 proof verify using the workload's per-block proof.bin.
+//! Two block-validation experiments via `--mode`:
+//!   - `reexecute` (Experiment A): every node re-executes apply_block; slow
+//!     nodes additionally sleep `slow_delay_per_tx_ns * txs_total` to model
+//!     weaker hardware. Throughput is gated by the slow nodes.
+//!   - `verify` (Experiment B, hybrid): slow nodes verify the SP1 proof in the
+//!     block's proof.bin (≈30 ms regardless of block size); fast nodes still
+//!     re-execute apply_block. The thesis is that swapping STF re-execution
+//!     for proof verification on the weak nodes removes them as the bottleneck.
 //!
 //! Validation gates the PREPARE vote per the experiment design — a slow node
 //! that can't validate before the per-view NEXTVIEW timer fires misses the
@@ -75,8 +79,10 @@ struct Args {
     #[arg(long, default_value_t = 1895)]
     port: u16,
 
-    /// Block validation strategy: `reexecute` applies the txs locally,
-    /// `verify` checks the SP1 proof in the block's proof.bin.
+    /// Experiment selector. `reexecute`: every node re-executes the block
+    /// (slow nodes pay `slow_delay_per_tx_ns` per tx). `verify`: hybrid — slow
+    /// nodes verify the SP1 proof, fast nodes still re-execute. Together they
+    /// isolate whether the slow nodes' STF cost is the consensus bottleneck.
     #[arg(long, value_enum)]
     mode: Mode,
 
@@ -261,43 +267,58 @@ async fn main() {
 
 // ─── setup helpers ──────────────────────────────────────────────────────────
 
-async fn build_validator(args: &Args, elf_path: &Path, tag: &str) -> Validator {
+/// Per-node validation strategy. Encodes the hybrid: in `--mode reexecute`
+/// every node re-executes; in `--mode verify` only the slow nodes verify the
+/// SP1 proof while fast nodes still re-execute. The point of the verify-mode
+/// hybrid is to demonstrate that swapping STF re-execution for proof
+/// verification on the weak nodes removes them as a consensus bottleneck —
+/// see the README / writeup for the experimental motivation.
+fn this_node_reexecutes(args: &Args) -> bool {
     match args.mode {
-        Mode::Verify => {
-            eprintln!("{tag} loading elf + prover setup...");
-            let ep = elf_path.to_path_buf();
-            let (client, vkey) = tokio::task::spawn_blocking(move || {
-                let elf_bytes = fs::read(&ep)
-                    .unwrap_or_else(|e| panic!("failed to read elf at {ep:?}: {e}"));
-                let elf: Elf = elf_bytes.into();
-                let client = ProverClient::from_env();
-                let pk = client.setup(elf).expect("failed to setup elf");
-                let vkey = pk.verifying_key().clone();
-                (client, vkey)
-            })
-            .await
-            .expect("prover setup panicked");
-            eprintln!("{tag} prover setup done");
-            Validator::Verify {
-                client: Arc::new(client),
-                vkey: Arc::new(vkey),
-            }
+        Mode::Reexecute => true,
+        Mode::Verify => matches!(args.speed, Speed::Fast),
+    }
+}
+
+async fn build_validator(args: &Args, elf_path: &Path, tag: &str) -> Validator {
+    if this_node_reexecutes(args) {
+        let slow_delay = if matches!(args.speed, Speed::Slow) {
+            args.slow_delay_per_tx_ns
+        } else {
+            0
+        };
+        eprintln!(
+            "{tag} validator: reexecute (slow_delay_per_tx_ns={slow_delay})"
+        );
+        Validator::Reexecute {
+            slow_delay_per_tx_ns: slow_delay,
         }
-        Mode::Reexecute => {
-            let slow_delay = if matches!(args.speed, Speed::Slow) {
-                args.slow_delay_per_tx_ns
-            } else {
-                0
-            };
-            Validator::Reexecute {
-                slow_delay_per_tx_ns: slow_delay,
-            }
+    } else {
+        eprintln!("{tag} loading elf + prover setup...");
+        let ep = elf_path.to_path_buf();
+        let (client, vkey) = tokio::task::spawn_blocking(move || {
+            let elf_bytes = fs::read(&ep)
+                .unwrap_or_else(|e| panic!("failed to read elf at {ep:?}: {e}"));
+            let elf: Elf = elf_bytes.into();
+            let client = ProverClient::from_env();
+            let pk = client.setup(elf).expect("failed to setup elf");
+            let vkey = pk.verifying_key().clone();
+            (client, vkey)
+        })
+        .await
+        .expect("prover setup panicked");
+        eprintln!("{tag} validator: verify (prover setup done)");
+        Validator::Verify {
+            client: Arc::new(client),
+            vkey: Arc::new(vkey),
         }
     }
 }
 
 fn init_state(args: &Args, workload: &Workload) -> State {
-    if matches!(args.mode, Mode::Reexecute) {
+    // Re-executing nodes need the actual balances; verifying nodes only chain
+    // post-state roots from each proof and never touch a per-account state.
+    if this_node_reexecutes(args) {
         let mut s = State::new();
         for i in 0..workload.manifest.num_accounts {
             s.set_balance(i, workload.manifest.initial_balance);
