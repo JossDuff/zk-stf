@@ -12,11 +12,11 @@ This is a great problem to have! All we have to do is to increase the size of th
 
 We run some simulations and hypothesize how much throughput we can get:
 
-![FIGURE: Throughput vs block size — "What we think will happen" (hypothesized curve, rises to ~5M tx/s at 10M txns/block)](graphs/Throughput_vs_block_size.png)
+![FIGURE: Throughput vs block size — "What we think will happen" (hypothesized curve, rises to ~5M tx/s at 10M txns/block)](./graphs/Throughput_vs_block_size.png)
 
 This looks great! Let's implement it live in production and see how our network performs with larger block sizes:
 
-![FIGURE: Network throughput vs block size — "What actually happened" (real measured curve, flattens around ~1.5M tx/s)](graphs/Throughput_vs_block_size(real).png)
+![FIGURE: Network throughput vs block size — "What actually happened" (real measured curve, flattens around ~1.5M tx/s)](./graphs/Throughput_vs_block_size(real).png)
 
 Woah! This isn't right.
 
