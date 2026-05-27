@@ -108,13 +108,13 @@ If the network fails to reach consensus within the timeout window of 2.5 seconds
 
 We measure network throughput as transactions per second. Throughput should increase as txns per block increases, assuming that each block takes at most 2.5 seconds. When it takes f+1 nodes MORE THAN 2.5 seconds to validate a block, throughput starts to diminish as blocks get re-tried.
 
-<!-- FIGURE: Throughput vs block size (re-execute) — curves for no/2x/4x/6x/8x variance, all collapsing at higher variance -->
+![FIGURE: Throughput vs block size (re-execute) — curves for no/2x/4x/6x/8x variance, all collapsing at higher variance](./graphs/Throughput_vs_block_size_(re-execute).png)
 
 In a regular network with block re-execution (no zk-proof verification), we see great throughput scaling when there is no node variance and diminishing returns as variance is increased. At 4, 6, and 8x node variance, there is almost no throughput increase from scaling the block size from 500k to 10M transactions.
 
 ### Consensus Failures per block (re-execution)
 
-<!-- TABLE: Consensus failures per block by workload (rows: 1k..10M) x variance (columns: no/2x/4x/6x/8x). 0 everywhere except 5M (0,0,1,1,1) and 10M (0,1,1,2,2) -->
+![TABLE: Consensus failures per block by workload (rows: 1k..10M) x variance (columns: no/2x/4x/6x/8x). 0 everywhere except 5M (0,0,1,1,1) and 10M (0,1,1,2,2)](./graphs/failures.png)
 
 Part of the decrease in throughput is explained by the amount of consensus rounds required to commit each block.
 
@@ -124,11 +124,11 @@ Part of the decrease in throughput is explained by the amount of consensus round
 
 Slow nodes bottlenecked the network by not responding within the timeout window, forcing multiple rounds of consensus per block.
 
-<!-- FIGURE: Throughput vs block size (zk-proof) — curves for no/2x/4x/6x/8x variance, all overlapping (slow nodes no longer a bottleneck) -->
+![FIGURE: Throughput vs block size (zk-proof) — curves for no/2x/4x/6x/8x variance, all overlapping (slow nodes no longer a bottleneck)](./graphs/Throughput_vs_block_size_(zk-proof).png)
 
 When slow nodes verify a zk proof instead of re-executing the entire block, the bottleneck of slow nodes is completely eliminated, and the network proceeds at the pace of the fast nodes. In this setup, there are no timeouts hit during consensus, compared to the above table.
 
-<!-- FIGURE: Speedup of switching to zk-proofs — speedup ratio vs block size, one curve per variance level. ~7x speedup at 10M txns under 8x variance; ~1x or slightly below at small block sizes -->
+![FIGURE: Speedup of switching to zk-proofs — speedup ratio vs block size, one curve per variance level. ~7x speedup at 10M txns under 8x variance; ~1x or slightly below at small block sizes](./graphs/Speedup_of_switching_to_zk-proofs.png)
 
 In smaller block sizes where the slow nodes do not bottleneck the system there is no meaningful speedup. There is only significant speedup at blocks of 500k and up. In fact, there is actually a small *slowdown* in smaller blocks where slow nodes can execute the block in less time than the constant time of verifying a zk-proof.
 
