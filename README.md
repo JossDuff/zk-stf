@@ -1,7 +1,4 @@
 # ZK-Augmented HotStuff: Decoupling Block Validation from Consensus Throughput in Permissionless BFT
-
-Joss Duff
-
 A BFT replicated state machine where the proposer proves state transition execution with a SP1 zero-knowledge proof, and validators verify the proof instead of re-executing the block themselves.
 
 ## Problem
